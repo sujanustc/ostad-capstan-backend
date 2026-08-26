@@ -1,0 +1,52 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend
+  namespace: dev
+  labels:
+    app: backend
+    env: dev
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: backend
+      env: dev
+  template:
+    metadata:
+      labels:
+        app: backend
+        env: dev
+    spec:
+      containers:
+        - name: backend
+          image: dasujandb/support-chat-backend:dev-latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 5000
+          env:
+            - name: PORT
+              value: "5000"
+            - name: NODE_ENV
+              value: "development"
+            - name: CLIENT_URL
+              value: "http://13.203.161.35:30002"
+            - name: CHAT_PRIMARY_COLOR
+              value: "#2563EB"
+            - name: CHAT_SECONDARY_COLOR
+              value: "#EFF6FF"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend-service
+  namespace: dev
+spec:
+  type: NodePort
+  selector:
+    app: backend
+    env: dev
+  ports:
+    - port: 5000
+      targetPort: 5000
+      nodePort: 30001

@@ -1,0 +1,73 @@
+name: CD - Backend Production Auto-Deploy on PR
+
+on:
+  pull_request:
+    branches: [ prod ]
+    types: [ opened, synchronize, reopened ]
+
+jobs:
+  auto-deploy-prod:
+    name: Build & Auto Deploy Backend Production on PR Open
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          ref: ${{ github.event.pull_request.head.ref }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Backend Typecheck & Build
+        run: |
+          npm install
+          npm run typecheck
+          npm run build
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Generate Traceable Version Tag
+        id: vars
+        run: |
+          SHORT_SHA=$(git rev-parse --short HEAD)
+          TIMESTAMP=$(date +'%Y%m%d%H%M')
+          echo "TAG=prod-${SHORT_SHA}-${TIMESTAMP}" >> $GITHUB_OUTPUT
+
+      - name: Build & Push Production Backend Image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile.prod
+          push: true
+          tags: |
+            dasujandb/support-chat-backend:${{ steps.vars.outputs.TAG }}
+            dasujandb/support-chat-backend:prod-latest
+
+      - name: Update K8s Production Image Tag (GitOps Trigger)
+        run: |
+          NEW_TAG="${{ steps.vars.outputs.TAG }}"
+          sed -i "s|image: .*support-chat-backend:.*|image: dasujandb/support-chat-backend:${NEW_TAG}|g" k8s/prod/backend.yaml
+
+      - name: Commit & Push Updated K8s Manifests to Branch
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add k8s/prod/
+          git commit -m "auto(gitops): update backend prod image tag to ${{ steps.vars.outputs.TAG }} [skip ci]" || echo "No changes to commit"
+          git push
+
+      - name: Send Telegram Alert (Optional Bonus)
+        if: ${{ secrets.TELEGRAM_BOT_TOKEN != '' }}
+        run: |
+          MESSAGE="🚀 *Backend Production Auto-Deploy Triggered!*%0A%0A*Repo*: ostad-capstan-backend%0A*PR Target*: prod%0A*Image Tag*: \`${{ steps.vars.outputs.TAG }}\`%0A*Status*: Deployed & Argo CD Auto-Syncing!"
+          curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
+            -d "chat_id=${{ secrets.TELEGRAM_CHAT_ID }}" \
+            -d "text=${MESSAGE}" \
+            -d "parse_mode=Markdown" || true
